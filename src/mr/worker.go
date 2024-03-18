@@ -36,6 +36,13 @@ func Worker(mapf func(string, string) []KeyValue,
 	// set log level to error and above
 	log.SetOutput(os.Stderr)
 	workerId := RegisterWorker()
+	// Start a go routine to keep sending heart bea
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			SendHeartBeat(workerId)
+		}
+	}()
 	for {
 		reply := CallGetTask(workerId)
 		if reply.Task.TaskType == None {
@@ -50,6 +57,13 @@ func Worker(mapf func(string, string) []KeyValue,
 			executeReduceTask(reducef, reply)
 		}
 	}
+}
+
+func SendHeartBeat(workerId int) {
+	args := HeartBeatArgs{}
+	args.WorkerId = workerId
+	reply := HeartBeatReply{}
+	call("Coordinator.HeartBeat", &args, &reply)
 }
 
 func executeMapTask(mapf func(string, string) []KeyValue, reply GetTaskReply) {
@@ -102,12 +116,12 @@ func executeReduceTask(reducef func(string, []string) string, reply GetTaskReply
 func ReadIntermediateFile(filename string) ([]KeyValue, error) {
 	file, err := os.Open(filename)
 	if err != nil {
-		log.Printf("cannot open %v", filename)
+		// log.Printf("cannot open %v", filename)
 		return nil, err
 	}
 	content, err := io.ReadAll(file)
 	if err != nil {
-		log.Printf("cannot read %v", filename)
+		// log.Printf("cannot read %v", filename)
 		return nil, err
 	}
 	file.Close()

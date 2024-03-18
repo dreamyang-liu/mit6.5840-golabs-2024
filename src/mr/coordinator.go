@@ -18,9 +18,8 @@ const (
 )
 
 const (
-	Idle    = 0
-	Busy    = 1
-	Unknown = 2
+	Running = 0
+	Lost    = 1
 )
 
 type WorkerStatus struct {
@@ -33,15 +32,13 @@ type Task struct {
 	TaskId     int
 	TaskType   int
 	TaskStatus int
+	WorkerId   int
 	KeyValue   KeyValue
 }
 
 type Coordinator struct {
 	// Your definitions here.
-	WorkerStatus            map[int]WorkerStatus
-	WorkerHeartBeatInterval int
-	MapTaskTimeOut          int
-	ReduceTaskTimeOut       int
+	WorkerStatus map[int]WorkerStatus
 
 	finishedMapTasks    int
 	finishedReduceTasks int
@@ -98,14 +95,22 @@ func (c *Coordinator) RegisterWorker(args *RegisterWorkerArgs, reply *RegisterWo
 	log.Println("Register Worker")
 	reply.WorkerId = len(c.WorkerStatus)
 	currentTimeStampInSec := time.Now().UnixMilli() / 1000
-	c.WorkerStatus[reply.WorkerId] = WorkerStatus{WorkerId: reply.WorkerId, Status: Idle, LastUpdateInSec: currentTimeStampInSec}
+	c.WorkerStatus[reply.WorkerId] = WorkerStatus{WorkerId: reply.WorkerId, Status: Running, LastUpdateInSec: currentTimeStampInSec}
+	c.mutex.Unlock()
+	return nil
+}
 
+func (c *Coordinator) HeartBeat(args *HeartBeatArgs, reply *HeartBeatReply) error {
+	// Your code here.
+	c.mutex.Lock()
+	c.WorkerStatus[args.WorkerId] = WorkerStatus{WorkerId: args.WorkerId, Status: Running, LastUpdateInSec: time.Now().Unix()}
 	c.mutex.Unlock()
 	return nil
 }
 
 func (c *Coordinator) UpdateTaskStatus(args *UpdateTaskStatusArgs, reply *UpdateTaskStatusReply) error {
 	// Your code here.
+	c.mutex.Lock()
 	if args.TaskType == Map {
 		if c.mapTasks[args.TaskId].TaskStatus != Finished && args.TaskStatus == Finished {
 			c.finishedMapTasks++
@@ -121,6 +126,7 @@ func (c *Coordinator) UpdateTaskStatus(args *UpdateTaskStatusArgs, reply *Update
 		log.Println("Map Tasks finished, populating Reduce Tasks...")
 		c.LoadReduceTasks()
 	}
+	c.mutex.Unlock()
 	return nil
 }
 
@@ -131,6 +137,7 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 		for idx, task := range c.mapTasks {
 			if task.TaskStatus == Unassigned {
 				c.mapTasks[idx].TaskStatus = Assigned
+				c.mapTasks[idx].WorkerId = args.WorkerId
 				c.mutex.Unlock()
 				reply.Task = task
 				reply.NReduce = c.nReduce
@@ -142,6 +149,7 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 		for idx, task := range c.reduceTasks {
 			if task.TaskStatus == Unassigned {
 				c.reduceTasks[idx].TaskStatus = Assigned
+				c.reduceTasks[idx].WorkerId = args.WorkerId
 				c.mutex.Unlock()
 				reply.Task = task
 				reply.NReduce = c.nReduce
@@ -176,20 +184,43 @@ func (c *Coordinator) Done() bool {
 	return c.finishedMapTasks == c.nMap && c.finishedReduceTasks == c.nReduce
 }
 
+// HeartBeatMonitor monitors the worker status and mark them as lost if they are not sending heartbeats
+func (c *Coordinator) HeartBeatMonitor() {
+	go func() {
+		for {
+			time.Sleep(10 * time.Second)
+			c.mutex.Lock()
+			for workerId, workerStatus := range c.WorkerStatus {
+				if time.Now().Unix()-workerStatus.LastUpdateInSec > 10 {
+					c.WorkerStatus[workerId] = WorkerStatus{WorkerId: workerId, Status: Lost, LastUpdateInSec: time.Now().Unix()}
+					for idx, task := range c.mapTasks {
+						if task.WorkerId == workerId && task.TaskStatus != Finished {
+							c.mapTasks[idx].TaskStatus = Unassigned
+						}
+					}
+					for idx, task := range c.reduceTasks {
+						if task.WorkerId == workerId && task.TaskStatus != Finished {
+							c.reduceTasks[idx].TaskStatus = Unassigned
+						}
+					}
+				}
+			}
+			c.mutex.Unlock()
+		}
+	}()
+}
+
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 	c.WorkerStatus = make(map[int]WorkerStatus)
-	c.WorkerHeartBeatInterval = 10
-	c.MapTaskTimeOut = 10
-	c.ReduceTaskTimeOut = 10
 	c.nReduce = nReduce
 	c.nMap = len(files)
 	// Your code here.
 	c.LoadMapTasksFromInput(files)
-
+	c.HeartBeatMonitor()
 	c.server()
 	return &c
 }

@@ -47,6 +47,15 @@ type GetTaskReply struct {
 	NMap    int
 }
 
+// HeartBeat RPC
+
+type HeartBeatArgs struct {
+	WorkerId int
+}
+
+type HeartBeatReply struct {
+}
+
 // Add your RPC definitions here.
 
 // Cook up a unique-ish UNIX-domain socket name
