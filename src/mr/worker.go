@@ -33,16 +33,17 @@ func Worker(mapf func(string, string) []KeyValue,
 	// Your worker implementation here.
 
 	// uncomment to send the Example RPC to the coordinator.
+	// set log level to error and above
+	log.SetOutput(os.Stderr)
 	workerId := RegisterWorker()
 	for {
 		reply := CallGetTask(workerId)
 		if reply.Task.TaskType == None {
-			log.Println("No task available, hibernating for 5 seconds")
-			time.Sleep(5 * time.Second)
+			log.Println("No task available, hibernating for 2 seconds")
+			time.Sleep(2 * time.Second)
 			continue
 		}
 		if reply.Task.TaskType == Map {
-			log.Println("Executing Map Task: ", reply.Task.TaskId)
 			executeMapTask(mapf, reply)
 			// time.Sleep(5 * time.Second)
 		} else if reply.Task.TaskType == Reduce {
@@ -73,7 +74,11 @@ func executeReduceTask(reducef func(string, []string) string, reply GetTaskReply
 	}
 	kvs := []KeyValue{}
 	for _, filename := range intermediate_files {
-		kvs = append(kvs, ReadIntermediateFile(filename)...)
+		tmp_kvs, err := ReadIntermediateFile(filename)
+		if err != nil {
+			continue
+		}
+		kvs = append(kvs, tmp_kvs...)
 	}
 	output := fmt.Sprintf("mr-out-%d", task.TaskId)
 	file, err := os.Create(output)
@@ -94,14 +99,16 @@ func executeReduceTask(reducef func(string, []string) string, reply GetTaskReply
 	callUpdateTaskStatus(task.TaskId, task.TaskType, Finished)
 }
 
-func ReadIntermediateFile(filename string) []KeyValue {
+func ReadIntermediateFile(filename string) ([]KeyValue, error) {
 	file, err := os.Open(filename)
 	if err != nil {
-		log.Fatalf("cannot open %v", filename)
+		log.Printf("cannot open %v", filename)
+		return nil, err
 	}
 	content, err := io.ReadAll(file)
 	if err != nil {
-		log.Fatalf("cannot read %v", filename)
+		log.Printf("cannot read %v", filename)
+		return nil, err
 	}
 	file.Close()
 	separatedLines := strings.Split(string(content), "\n")
@@ -112,7 +119,7 @@ func ReadIntermediateFile(filename string) []KeyValue {
 			kvs = append(kvs, KeyValue{separatedKV[0], separatedKV[1]})
 		}
 	}
-	return kvs
+	return kvs, nil
 }
 
 func writeIntermediateFile(taskId int, reduceTaskId int, kvs []KeyValue) {
